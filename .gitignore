@@ -1,0 +1,12 @@
+*.stl
+*.out
+checkpoint_*
+continue.*
+params.xml
+slurm-*
+submit-*
+boatHullFormSolver.o
+boatHullFormSolver
+.sconsign.dblite
+plbError.dat
+tmp/
