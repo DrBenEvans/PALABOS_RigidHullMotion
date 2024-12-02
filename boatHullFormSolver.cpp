@@ -26,8 +26,8 @@
 #include "palabos3D.h"
 #include "palabos3D.hh"
 
-#include "pypal/headers3D.h"
-#include "pypal/headers3D.hh"
+//#include "headers3D.h"   //pypal/
+//#include "headers3D.hh"
 
 #include <algorithm>
 #include <cstdlib>
@@ -532,29 +532,86 @@ T waveForce(T t)
     return param.A_LB * std::fabs(param.gravity_LB) * std::sin((T) 2 * pi * t / param.P_LB);
 }
 
+
+
 void setupBoatGeometry(bool operateOnOuterBorder, MultiScalarField3D<int>& tags)
 {
+
+//Load the STL file into triangleset
+    //std::shared_ptr<TriangleSet<T> > triangleSet(new TriangleSet<T>(param.boatStl));
     TriangleSet<T>* triangleSet = new TriangleSet<T>(param.boatStl);
     triangleSet->translate(-param.physicalLocation);
     triangleSet->scale((T) 1 / param.dx);
 
+    //convert to a connected triangle mesh
     RawConnectedTriangleMesh<T>* mesh = 0;
     {
         RawTriangleMesh<T> rawMesh = triangleSetToRawTriangleMesh(*triangleSet);
         mesh = new RawConnectedTriangleMesh<T>(MeshConnector<T>(rawMesh).generateConnectedMesh());
     }
     inflate(*mesh, param.inflationParameter);
+    
+     
+    //create a voxel matrix using an alternative function
     plint borderWidth = 1;
-    MultiNTensorField3D<int>* voxelMatrix = meshToVoxel(*mesh, tags.getBoundingBox(), borderWidth);
-    delete mesh; mesh = 0;
-
-    setToConstant(tags, voxelMatrix->scalarView(), voxelFlag::inside, tags.getBoundingBox(), (int) IN);
-    setToConstant(tags, voxelMatrix->scalarView(), voxelFlag::innerBorder, tags.getBoundingBox(), (int) IN);
+  //  std::unique_ptr<MultiScalarField3D<int> > voxelMatrix;
+  //  {
+   //MultiNTensorField3D<int>* voxelMatrix =  voxelize(*mesh, tags, borderWidth);
+   //MultiNTensorField3D<int>* voxelMatrix;
+    // }
+     delete mesh; mesh = 0;
+     
+      /*  VoxelizedDomain3D<T> voxelizedDomain(
+        boundary, typeOfVoxelization, extraLayer, borderWidth, extendedEnvelopeWidth, blockSize);
+    
+    //VoxelizedDomain3D<T> voxelizedDomain(*mesh, tags.getBoundingBox(), borderWidth);
+    setToConstant(tags, voxelizedDomain.getVoxelMatrix(), voxelFlag::inside,tags.getBoundingBox(), (int) IN);
+    setToConstant(tags, voxelizedDomain.getVoxelMatrix(), voxelFlag::innerBorder,tags.getBoundingBox(), (int) IN);
     if (operateOnOuterBorder) {
-        setToConstant(tags, voxelMatrix->scalarView(), voxelFlag::outerBorder, tags.getBoundingBox(), (int) IN);
+        setToConstant(tags, voxelizedDomain.getVoxelMatrix(), voxelFlag::outerBorder, tags.getBoundingBox(), (int) IN);
     }
-    delete voxelMatrix; voxelMatrix = 0;
+    */
+    
+    //plint referenceResolution = 0.;
+    
+    //plint resolution = referenceResolution * util::twoToThePower(level);
+    
+    plint resolution = 0.;
+    plint referenceDirection = 0;
+    plint margin = 3;
+    plint extraLayer = 0;
+    
+    DEFscaledMesh<T> *defMesh =
+        new DEFscaledMesh<T>(*triangleSet, resolution, referenceDirection, margin, extraLayer);
+    TriangleBoundary3D<T> boundary(*defMesh);
+    delete defMesh;
+    boundary.getMesh().inflate();
+    
+    
+    
+    const plint extendedEnvelopeWidth = 2;
+    const int flowType = voxelFlag::outside;
+    const plint blockSize = 0;
+    
+    
+    
+    VoxelizedDomain3D<T> voxelizedDomain(
+        boundary, flowType, param.fullDomain, borderWidth, extendedEnvelopeWidth, blockSize);
+    //MultiNTensorField3D<int>* voxelMatrix = meshToVoxel(*mesh, tags.getBoundingBox(), borderWidth);
+    //delete mesh; mesh = 0;
 
+    pcout << " = " << std::endl;
+
+    //set values in the tag field
+    setToConstant(tags, voxelizedDomain.getVoxelMatrix(), voxelFlag::inside, tags.getBoundingBox(), (int) IN);
+    setToConstant(tags, voxelizedDomain.getVoxelMatrix(), voxelFlag::innerBorder, tags.getBoundingBox(), (int) IN);
+    if (operateOnOuterBorder) {
+        setToConstant(tags, voxelizedDomain.getVoxelMatrix(), voxelFlag::outerBorder, tags.getBoundingBox(), (int) IN);
+    }
+   //delete voxelMatrix; voxelMatrix = 0;
+
+   
+    //recursively refine the triangle set
     plint maxRefinements = 100;
     T targetLength = (T) 1;
     bool succeeded = triangleSet->refineRecursively(targetLength, maxRefinements);
@@ -567,12 +624,14 @@ void setupBoatGeometry(bool operateOnOuterBorder, MultiScalarField3D<int>& tags)
         exit(1);
     }
 
+//generate the final connected triangle mesh
     {
         RawTriangleMesh<T> rawMesh = triangleSetToRawTriangleMesh(*triangleSet);
-        delete triangleSet; triangleSet = 0;
+        //delete triangleSet; triangleSet = 0;
         param.connectedMesh = new RawConnectedTriangleMesh<T>(MeshConnector<T>(rawMesh).generateConnectedMesh());
     }
 
+//extract vertex information
     plint numVertices = param.connectedMesh->getNumVertices();
     param.vertices.resize(numVertices);
     param.areas.resize(numVertices);
@@ -703,13 +762,14 @@ void writeVTK(FreeSurfaceFields3D<T,DESCRIPTOR>& fields, MultiTensorField3D<T,3>
     vtkOut.writeData<float>(*normalVF, "volumeFraction", 1.0);
     delete normalVF; normalVF = 0;
     vtkOut.writeData<float>(*extractSubDomain(smoothVF, outputDomain), "volumeFractionFiltered", 1.0);
-    std::auto_ptr<MultiTensorField3D<T,3> > v = freeSurfaceComputeForcedVelocity(fields.lattice, force, fields.flag, outputDomain);
+    std::unique_ptr<MultiTensorField3D<T,3> > v = freeSurfaceComputeForcedVelocity(fields.lattice, force, fields.flag, outputDomain);
     vtkOut.writeData<3,float>(*v, "velocity", param.dx / param.dt);
 }
 
 void writeResults(FreeSurfaceFields3D<T,DESCRIPTOR>& fields, MultiTensorField3D<T,3>& force,
         MultiScalarField3D<int>& tags, plint iIter)
 {
+    
     MultiScalarField3D<T>* smoothVF = generateMultiScalarField<T>(fields.volumeFraction, 1).release();
     copy(fields.volumeFraction, *smoothVF, fields.volumeFraction.getBoundingBox());
     lbmSmoothenInPlace<T,SM_DESCRIPTOR>(*smoothVF);
@@ -719,7 +779,7 @@ void writeResults(FreeSurfaceFields3D<T,DESCRIPTOR>& fields, MultiTensorField3D<
     T pressureScale = param.rho * (param.dx * param.dx) / (param.dt * param.dt) * DESCRIPTOR<T>::cs2;
     T pressureOffset = param.ambientPressure -
         param.rho_LB * param.rho * (param.dx * param.dx) / (param.dt * param.dt) * DESCRIPTOR<T>::cs2;
-    std::auto_ptr<MultiScalarField3D<T> > pressure = computeDensity(fields.lattice);
+    std::unique_ptr<MultiScalarField3D<T> > pressure = computeDensity(fields.lattice);
     pressure->periodicity().toggle(0, true);
     pressure->periodicity().toggle(1, false);
     pressure->periodicity().toggle(2, true);
@@ -748,7 +808,7 @@ void writeResults(FreeSurfaceFields3D<T,DESCRIPTOR>& fields, MultiTensorField3D<
     }
 
     // Use a marching-cube algorithm to reconstruct the free surface and write an STL file.
-
+/*
     std::vector<T> isoLevels;
     isoLevels.push_back((T) 0.5);
     typedef TriangleSet<T>::Triangle Triangle;
@@ -765,11 +825,11 @@ void writeResults(FreeSurfaceFields3D<T,DESCRIPTOR>& fields, MultiTensorField3D<
     set.translate(param.physicalLocation);
     set.writeBinarySTL(createFileName(param.outDir + "interface_", iIter, param.fileNamePadding) + ".stl");
 
-    // Export the pressure on the surface of the boat.
+    // Export the pressure on the surface of the boat.   ****we can ignore this********
 
     RawConnectedTriangleMesh<T> mesh(*param.connectedMesh);
     plint envelopeWidth = 1;
-    std::auto_ptr<MultiScalarField3D<int> > mask = generateMultiScalarField<int>((MultiBlock3D&) fields.flag, envelopeWidth);
+    std::unique_ptr<MultiScalarField3D<int> > mask = generateMultiScalarField<int>((MultiBlock3D&) fields.flag, envelopeWidth);
     setToConstant(*mask, mask->getBoundingBox(), (int) 0);
     setToConstant(*mask, fields.flag, (int) freeSurfaceFlag::fluid, fields.flag.getBoundingBox(), (int) 1);
     setToConstant(*mask, fields.flag, (int) freeSurfaceFlag::interface, fields.flag.getBoundingBox(), (int) 1);
@@ -780,11 +840,12 @@ void writeResults(FreeSurfaceFields3D<T,DESCRIPTOR>& fields, MultiTensorField3D<
         applyProcessingFunctional(new MaskedNTensorNeumannInLayersFunctional3D<T>(0, 1, -1),
                 pressure->getBoundingBox(), pressure->nTensorView(), mask->nTensorView());
     }
-    nTensorFieldToMesh(pressure->nTensorView(), mesh, "pressure");
+    //nTensorFieldToMesh(pressure->nTensorView(), mesh, "pressure");
     mesh.scale(param.dx);
     mesh.translate(param.physicalLocation);
     std::string fname = createFileName(param.outDir + "boat_pressure_", iIter, param.fileNamePadding) + ".vtk";
-    writeVTK(mesh, fname);
+writeVTK(mesh, fname);
+*/
 }
 
 
@@ -929,10 +990,10 @@ int main(int argc, char *argv[])
 #endif
 
     plint targetEnvelopeWidth = 1;
-    std::auto_ptr<MultiScalarField3D<T> > targetVolumeFraction = generateMultiScalarField<T>(
+    std::unique_ptr<MultiScalarField3D<T> > targetVolumeFraction = generateMultiScalarField<T>(
             (MultiBlock3D&) fields.volumeFraction, targetEnvelopeWidth);
     copy(fields.volumeFraction, *targetVolumeFraction, fields.volumeFraction.getBoundingBox());
-    std::auto_ptr<MultiTensorField3D<T,3> > targetVelocity = generateMultiTensorField<T,3>(
+    std::unique_ptr<MultiTensorField3D<T,3> > targetVelocity = generateMultiTensorField<T,3>(
             (MultiBlock3D&) fields.j, targetEnvelopeWidth);
     setToConstant<T,3>(*targetVelocity, targetVelocity->getBoundingBox(), Array<T,3>(param.initialVelocity_LB, (T) 0, (T) 0));
 
@@ -986,46 +1047,6 @@ int main(int argc, char *argv[])
     pcout << "The full initialization phase took " << global::timer("init").getTime() << " seconds on "
           << nproc << " processes." << std::endl;
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     // Starting iterations.
 
     pcout << std::endl;
@@ -1050,11 +1071,10 @@ int main(int argc, char *argv[])
             pcout << "Average kinetic energy: " << energy << std::endl;
 
             bool isCompressible = !param.incompressibleModel;
-            MultiNTensorField3D<T>* stress = pypal_computeStress(fields.lattice, fields.lattice.getBoundingBox(),
-                    param.rho_LB, isCompressible);
+            //MultiNTensorField3D<T>* stress = computeStress(fields.lattice, fields.lattice.getBoundingBox(), param.rho_LB, isCompressible); 
 
             plint envelopeWidth = 1;
-            std::auto_ptr<MultiScalarField3D<int> > mask = generateMultiScalarField<int>((MultiBlock3D&) fields.flag, envelopeWidth);
+            std::unique_ptr<MultiScalarField3D<int> > mask = generateMultiScalarField<int>((MultiBlock3D&) fields.flag, envelopeWidth);
 
             setToConstant(*mask, mask->getBoundingBox(), (int) 0);
             setToConstant(*mask, fields.flag, (int) freeSurfaceFlag::fluid, fields.flag.getBoundingBox(), (int) 1);
@@ -1062,13 +1082,16 @@ int main(int argc, char *argv[])
             if (param.excludeInteriorForOutput) {
                 setToConstant(*mask, tags, (int) IN, tags.getBoundingBox(), (int) 0);
             }
-            for (plint iLayer = 0; iLayer < 3; iLayer++) {
-                applyProcessingFunctional(new MaskedNTensorNeumannInLayersFunctional3D<T>(0, 1, -1),
-                        stress->getBoundingBox(), *stress, mask->nTensorView());
-            }
+            //for (plint iLayer = 0; iLayer < 3; iLayer++) {
+                //applyProcessingFunctional(new MaskedNTensorNeumannInLayersFunctional3D<T>(0, 1, -1),
+                       // stress->getBoundingBox(), * stress, mask->nTensorView());
+           // }
 
-            Array<T,3> force_LB = surfaceForceIntegral(*stress, *param.connectedMesh);
-            delete stress; stress = 0;
+            //Array<T,3> force_LB = surfaceForceIntegral(stress, *param.connectedMesh);  //it should be for calculating force
+            
+            Array<T,3> force_LB;
+            
+            //delete stress; stress = 0;
 
             T forceConversion = param.rho * util::sqr(util::sqr(param.dx)) / util::sqr(param.dt);
 
